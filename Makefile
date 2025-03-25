@@ -12,8 +12,8 @@ all: kmod xo-user
 kmod: $(GIT_HOOKS) main.c
 	$(MAKE) -C $(KDIR) M=$(PWD) modules
 
-xo-user: xo-user.c
-	$(CC) $(ccflags-y) -o $@ $<
+xo-user: xo-user.c agents/game.c agents/mcts.c agents/negamax.c agents/zobrist.c agents/mt19937-64.c
+	$(CC) $(ccflags-y)  -o $@ $^ -lm
 
 $(GIT_HOOKS):
 	@scripts/install-git-hooks
