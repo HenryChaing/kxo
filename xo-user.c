@@ -6,8 +6,10 @@
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
+#include <sys/ioctl.h>
 #include <sys/select.h>
 #include <termios.h>
+#include <time.h>
 #include <unistd.h>
 
 #include "agents/game.h"
@@ -19,6 +21,10 @@
 #define XO_DEVICE_FILE "/dev/kxo"
 #define XO_DEVICE_ATTR_FILE "/sys/class/kxo/kxo/kxo_state"
 #define ARRAY_SIZE(arr) (sizeof(arr) / sizeof((arr)[0]))
+#define ABUF_INIT \
+    {             \
+        NULL, 0   \
+    }
 
 struct task {
     jmp_buf env;
@@ -34,6 +40,18 @@ struct arg {
     char *task_name;
 };
 
+static struct editorConfig {
+    int screenrows;
+    int screencols;
+    struct termios orig_termios;
+};
+
+/*** append buffer ***/
+struct abuf {
+    char *b;
+    int len;
+};
+
 static LIST_HEAD(tasklist);
 static void (**tasks)(void *);
 static struct arg *args;
@@ -46,7 +64,11 @@ static char attr = 0;
 static char *mem_step;
 static unsigned int mem_step_size = 10;
 static unsigned int mem_step_counter;
+static struct editorConfig E;
 static void listen_keyboard_handler_nonmodule(void);
+void editorDrawStatusBar();
+void editorClearStatusBar();
+void editorRefreshStatusBar();
 
 static inline void enlarge_mem_step()
 {
@@ -151,12 +173,11 @@ void task0(void *arg)
                 table[predict] = 'O';
                 enlarge_mem_step();
                 mem_step[mem_step_counter++] = predict + 1;
-                printf("%d\n", mem_step[mem_step_counter - 1]);
-                draw_board(table);
+                editorRefreshStatusBar();
             } else {
                 enlarge_mem_step();
                 mem_step[mem_step_counter++] = 0;
-                draw_board(table);
+                editorRefreshStatusBar();
                 memset(table, ' ',
                        N_GRIDS); /* Reset the table so the game restart */
                 printf("kxo: %c win!!!\n", win);
@@ -199,12 +220,11 @@ void task1(void *arg)
                 table[move] = 'X';
                 enlarge_mem_step();
                 mem_step[mem_step_counter++] = move + 1;
-                printf("%d\n", mem_step[mem_step_counter - 1]);
-                draw_board(table);
+                editorRefreshStatusBar();
             } else {
                 enlarge_mem_step();
                 mem_step[mem_step_counter++] = 0;
-                draw_board(table);
+                editorRefreshStatusBar();
                 memset(table, ' ',
                        N_GRIDS); /* Reset the table so the game restart */
                 printf("kxo: %c win!!!\n", win);
@@ -275,23 +295,61 @@ static bool status_check(void)
     return true;
 }
 
-static struct termios orig_termios;
-
 static void raw_mode_disable(void)
 {
-    tcsetattr(STDIN_FILENO, TCSAFLUSH, &orig_termios);
+    tcsetattr(STDIN_FILENO, TCSAFLUSH, &E.orig_termios);
 }
 
 static void raw_mode_enable(void)
 {
-    tcgetattr(STDIN_FILENO, &orig_termios);
+    tcgetattr(STDIN_FILENO, &E.orig_termios);
     atexit(raw_mode_disable);
-    struct termios raw = orig_termios;
+    struct termios raw = E.orig_termios;
     raw.c_lflag &= ~(ECHO | ICANON);
     raw.c_iflag &= ~(IXON | IXOFF);  // disable ctrl+s ctrl+q
     raw.c_cc[VMIN] = 0;              // read() minimum numnber of byte
     raw.c_cc[VTIME] = 1;             // read() timeout
     tcsetattr(STDIN_FILENO, TCSAFLUSH, &raw);
+}
+
+int getWindowSize(int *rows, int *cols)
+{
+    struct winsize ws;
+    if (ioctl(STDOUT_FILENO, TIOCGWINSZ, &ws) == -1 || ws.ws_col == 0) {
+        return -1;
+    } else {
+        *cols = ws.ws_col;
+        *rows = ws.ws_row;
+        return 0;
+    }
+}
+
+void editorDrawStatusBar()
+{
+    write(STDOUT_FILENO, "\x1b[7m", 4);
+    time_t current = time(NULL);
+    char status[80];
+    int len = snprintf(status, sizeof(status), "UTC:       %s",
+                       asctime(gmtime(&current)));
+    write(STDOUT_FILENO, status, 35);
+    write(STDOUT_FILENO, "\x1b[m", 3);
+}
+
+/* purpose: clear one line
+ * method: move the cursor to left and clear the screan until end
+ *
+ */
+void editorClearStatusBar()
+{
+    write(STDOUT_FILENO, "\x1b[50D", 5);
+    write(STDOUT_FILENO, "\x1b[2K", 4);
+}
+
+void editorRefreshStatusBar()
+{
+    editorClearStatusBar();
+    draw_board(table);
+    editorDrawStatusBar();
 }
 
 static void listen_keyboard_handler_nonmodule(void)
