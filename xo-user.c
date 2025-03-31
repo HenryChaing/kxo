@@ -402,6 +402,19 @@ static void listen_keyboard_handler(void)
     close(attr_fd);
 }
 
+static void draw_bitmap(const unsigned int bitmap)
+{
+    char table[N_GRIDS];
+    for (int i = 0; i < 32; i += 2) {
+        if (bitmap & (1 << i)) {
+            table[i / 2] = 'O';
+        } else if (bitmap & (1 << i + 1)) {
+            table[i / 2] = 'X';
+        }
+    }
+    draw_board(table);
+}
+
 int main(int argc, char *argv[])
 {
     if (argc == 1) {
@@ -413,6 +426,7 @@ int main(int argc, char *argv[])
         fcntl(STDIN_FILENO, F_SETFL, flags | O_NONBLOCK);
 
         char display_buf[DRAWBUFFER_SIZE];
+        unsigned int read_result;
 
         fd_set readset;
         int device_fd = open(XO_DEVICE_FILE, O_RDONLY);
@@ -438,8 +452,11 @@ int main(int argc, char *argv[])
                 FD_CLR(device_fd, &readset);
                 printf(
                     "\033[H\033[J"); /* ASCII escape code to clear the screen */
-                read(device_fd, display_buf, DRAWBUFFER_SIZE);
-                printf("%s", display_buf);
+                // read(device_fd, display_buf, DRAWBUFFER_SIZE);
+                // printf("%s", display_buf);
+                read(device_fd, &read_result, sizeof(read_result));
+                draw_bitmap(read_result);
+                printf("%x\n", read_result);
             }
         }
 

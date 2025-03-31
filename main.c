@@ -78,6 +78,8 @@ static struct class *kxo_class;
 static struct cdev kxo_cdev;
 
 static char draw_buffer[DRAWBUFFER_SIZE];
+static unsigned int bitmap = 0;
+// static unsigned char test_byte = 'c';
 
 /* Data are stored into a kfifo buffer before passing them to the userspace */
 static DECLARE_KFIFO_PTR(rx_fifo, unsigned char);
@@ -94,9 +96,10 @@ static DECLARE_WAIT_QUEUE_HEAD(rx_wait);
 /* Insert the whole chess board into the kfifo buffer */
 static void produce_board(void)
 {
-    unsigned int len = kfifo_in(&rx_fifo, draw_buffer, sizeof(draw_buffer));
-    if (unlikely(len < sizeof(draw_buffer)) && printk_ratelimit())
-        pr_warn("%s: %zu bytes dropped\n", __func__, sizeof(draw_buffer) - len);
+    unsigned int len =
+        kfifo_in(&rx_fifo, (unsigned char *) &bitmap, sizeof(bitmap));
+    if (unlikely(len < sizeof(bitmap)) && printk_ratelimit())
+        pr_warn("%s: %zu bytes dropped\n", __func__, sizeof(bitmap) - len);
 
     pr_debug("kxo: %s: in %u/%u bytes\n", __func__, len, kfifo_len(&rx_fifo));
 }
@@ -175,9 +178,9 @@ static void drawboard_work_func(struct work_struct *w)
     }
     read_unlock(&attr_obj.lock);
 
-    mutex_lock(&producer_lock);
-    draw_board(table);
-    mutex_unlock(&producer_lock);
+    // mutex_lock(&producer_lock);
+    // draw_board(table);
+    // mutex_unlock(&producer_lock);
 
     /* Store data to the kfifo buffer */
     mutex_lock(&consumer_lock);
@@ -209,8 +212,10 @@ static void ai_one_work_func(struct work_struct *w)
 
     smp_mb();
 
-    if (move != -1)
+    if (move != -1) {
         WRITE_ONCE(table[move], 'O');
+        bitmap |= 1 << (2 * move);
+    }
 
     WRITE_ONCE(turn, 'X');
     WRITE_ONCE(finish, 1);
@@ -243,8 +248,10 @@ static void ai_two_work_func(struct work_struct *w)
 
     smp_mb();
 
-    if (move != -1)
+    if (move != -1) {
         WRITE_ONCE(table[move], 'X');
+        bitmap |= 1 << (2 * move + 1);
+    }
 
     WRITE_ONCE(turn, 'O');
     WRITE_ONCE(finish, 1);
@@ -346,9 +353,9 @@ static void timer_handler(struct timer_list *__timer)
             pr_info("kxo: [CPU#%d] Drawing final board\n", cpu);
             put_cpu();
 
-            mutex_lock(&producer_lock);
-            draw_board(table);
-            mutex_unlock(&producer_lock);
+            // mutex_lock(&producer_lock);
+            // draw_board(table);
+            // mutex_unlock(&producer_lock);
 
             /* Store data to the kfifo buffer */
             mutex_lock(&consumer_lock);
@@ -361,6 +368,7 @@ static void timer_handler(struct timer_list *__timer)
         if (attr_obj.end == '0') {
             memset(table, ' ',
                    N_GRIDS); /* Reset the table so the game restart */
+            bitmap = 0;
             mod_timer(&timer, jiffies + msecs_to_jiffies(delay));
         }
 
@@ -512,6 +520,7 @@ static int __init kxo_init(void)
     negamax_init();
     mcts_init();
     memset(table, ' ', N_GRIDS);
+    bitmap = 0;
     turn = 'O';
     finish = 1;
 
